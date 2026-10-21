@@ -1,439 +1,311 @@
--- EclipseHub 1.0
--- Clean, readable UI scaffold for Roblox Bee Swarm Simulator.
--- Gameplay automation is intentionally isolated from the UI and must be implemented/tested per executor.
-
-local HUB_NAME = "EclipseHub"
-local VERSION = "1.0"
+-- EclipseHub 1.2 - compact UI rebuild
+-- UI controls are real; game-specific automation is only implemented where stated.
+-- Do not treat quest checkboxes as working quest automation until handlers are added.
 
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local LocalPlayer = Players.LocalPlayer
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer
 
-local function getGuiParent()
-    local env = _G
-    if type(getgenv) == "function" then
-        local ok, result = pcall(getgenv)
-        if ok and type(result) == "table" then env = result end
-    end
+local ENV = _G
+pcall(function() if type(getgenv) == "function" then ENV = getgenv() end end)
 
-    local candidates = {"gethui", "get_hidden_gui"}
-    for _, name in ipairs(candidates) do
-        local fn = env[name] or _G[name]
-        if type(fn) == "function" then
-            local ok, parent = pcall(fn)
-            if ok and parent then return parent end
-        end
-    end
-    return LocalPlayer:WaitForChild("PlayerGui")
+local old
+pcall(function() old = ENV.EclipseHubGui end)
+if old then pcall(function() old:Destroy() end) end
+
+local C = {
+    bg = Color3.fromRGB(18, 19, 22),
+    sidebar = Color3.fromRGB(22, 23, 27),
+    panel = Color3.fromRGB(28, 30, 35),
+    hover = Color3.fromRGB(39, 42, 49),
+    border = Color3.fromRGB(48, 51, 59),
+    text = Color3.fromRGB(235, 237, 242),
+    muted = Color3.fromRGB(151, 156, 167),
+    accent = Color3.fromRGB(230, 180, 75),
+    check = Color3.fromRGB(230, 180, 75),
+}
+
+local Settings = {
+    autoDig = false, autoFarm = false, autoConvert = false,
+    autoSprinkler = false, autoTokens = false, antiAfk = false,
+    autoQuest = {}, beesmas = {}, debug = false,
+}
+local Connections = {}
+local function connect(signal, fn)
+    local c = signal:Connect(fn)
+    table.insert(Connections, c)
+    return c
 end
-
-local function safeDestroy(name)
-    local parent = getGuiParent()
-    local old = parent:FindFirstChild(name)
-    if old then pcall(function() old:Destroy() end) end
+local function disconnectAll()
+    for _, c in ipairs(Connections) do pcall(function() c:Disconnect() end) end
+    table.clear(Connections)
 end
-
-local function make(className, props, parent)
-    local obj = Instance.new(className)
-    for key, value in pairs(props or {}) do
-        obj[key] = value
-    end
+local function make(class, props, parent)
+    local obj = Instance.new(class)
+    for k, v in pairs(props or {}) do obj[k] = v end
     obj.Parent = parent
     return obj
 end
-
-local COLORS = {
-    background = Color3.fromRGB(18, 19, 24),
-    panel = Color3.fromRGB(24, 26, 33),
-    panel2 = Color3.fromRGB(31, 33, 42),
-    border = Color3.fromRGB(49, 52, 64),
-    text = Color3.fromRGB(235, 237, 244),
-    muted = Color3.fromRGB(145, 150, 166),
-    accent = Color3.fromRGB(151, 111, 255),
-    green = Color3.fromRGB(93, 205, 143),
-    red = Color3.fromRGB(235, 91, 105),
-}
-
-local FIELDS = {
-    "Sunflower Field", "Dandelion Field", "Mushroom Field", "Blue Flower Field",
-    "Clover Field", "Strawberry Field", "Spider Field", "Bamboo Field",
-    "Pineapple Patch", "Stump Field", "Cactus Field", "Pumpkin Patch",
-    "Pine Tree Forest", "Rose Field", "Mountain Top Field", "Pepper Patch",
-    "Coconut Field"
-}
-
-local SPRINKLERS = {
-    "Basic Sprinkler", "Silver Soakers", "Golden Gushers",
-    "Diamond Drenchers", "Supreme Saturators"
-}
-
-local state = {
-    selectedField = "Sunflower Field",
-    autoFarm = false,
-    autoDig = false,
-    autoSprinkler = false,
-    sprinklerType = "Basic Sprinkler",
-    parachute = false,
-    convertAt = 90,
-    autoQuest = false,
-    autoPlanters = false,
-    autoToys = false,
-    webhookEnabled = false,
-    antiAfk = false,
-    serverHop = false,
-    debugMode = false,
-}
-
-local actions = {}
-local screen -- Forward declaration used by notify().
-local function notify(message)
-    if type(message) ~= "string" then message = tostring(message) end
-    local toast = make("TextLabel", {
-        Name = "Toast", BackgroundColor3 = COLORS.panel2, BorderSizePixel = 0,
-        Size = UDim2.fromOffset(300, 38), Position = UDim2.new(1, -316, 1, -58),
-        Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = COLORS.text,
-        Text = message, TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex = 20,
-    }, screen)
-    make("UICorner", {CornerRadius = UDim.new(0, 7)}, toast)
-    make("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 8)}, toast)
-    task.delay(2.5, function()
-        if toast and toast.Parent then
-            pcall(function() toast:Destroy() end)
-        end
-    end)
+local function corner(parent, radius)
+    make("UICorner", {CornerRadius = UDim.new(0, radius or 5)}, parent)
+end
+local function stroke(parent, color)
+    make("UIStroke", {Color = color or C.border, Thickness = 1, Transparency = 0.15}, parent)
 end
 
-local GUI_NAME = "EclipseHubUI"
-safeDestroy(GUI_NAME)
-screen = make("ScreenGui", {
-    Name = GUI_NAME, ResetOnSpawn = false, IgnoreGuiInset = true,
+local gui = make("ScreenGui", {
+    Name = "EclipseHubGui", ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-}, getGuiParent())
+}, nil)
+ENV.EclipseHubGui = gui
+local parentOk = pcall(function()
+    if type(gethui) == "function" then gui.Parent = gethui()
+    else gui.Parent = game:GetService("CoreGui") end
+end)
+if not parentOk or not gui.Parent then gui.Parent = player:WaitForChild("PlayerGui") end
 
 local main = make("Frame", {
-    Name = "Main", Size = UDim2.fromOffset(690, 440), Position = UDim2.new(0.5, -345, 0.5, -220),
-    BackgroundColor3 = COLORS.background, BorderSizePixel = 0,
-    Active = true,
-}, screen)
-make("UICorner", {CornerRadius = UDim.new(0, 10)}, main)
-make("UIStroke", {Color = COLORS.border, Thickness = 1}, main)
+    Name = "Main", Size = UDim2.fromOffset(650, 420),
+    Position = UDim2.new(0.5, -325, 0.5, -210),
+    BackgroundColor3 = C.bg, BorderSizePixel = 0,
+}, gui)
+corner(main, 7); stroke(main)
 
-local top = make("Frame", {Name = "TopBar", Size = UDim2.new(1, 0, 0, 48), BackgroundColor3 = COLORS.panel, BorderSizePixel = 0}, main)
-make("UICorner", {CornerRadius = UDim.new(0, 10)}, top)
-make("Frame", {Size = UDim2.new(1, 0, 0, 10), Position = UDim2.new(0, 0, 1, -10), BackgroundColor3 = COLORS.panel, BorderSizePixel = 0}, top)
+local top = make("Frame", {Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = C.sidebar, BorderSizePixel = 0}, main)
+corner(top, 7)
+make("Frame", {Position = UDim2.new(0, 0, 1, -7), Size = UDim2.new(1, 0, 0, 7), BackgroundColor3 = C.sidebar, BorderSizePixel = 0}, top)
 make("TextLabel", {
-    BackgroundTransparency = 1, Position = UDim2.fromOffset(16, 0), Size = UDim2.new(1, -130, 1, 0),
-    Font = Enum.Font.GothamBold, TextSize = 15, TextColor3 = COLORS.text,
-    Text = "EclipseHub", TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -100, 1, 0),
+    BackgroundTransparency = 1, Text = "EclipseHub 1.2", TextColor3 = C.text,
+    Font = Enum.Font.GothamSemibold, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
 }, top)
-make("TextLabel", {
-    BackgroundTransparency = 1, Position = UDim2.new(1, -116, 0, 0), Size = UDim2.fromOffset(70, 48),
-    Font = Enum.Font.Gotham, TextSize = 10, TextColor3 = COLORS.muted,
-    Text = "v" .. VERSION, TextXAlignment = Enum.TextXAlignment.Right,
-}, top)
+local minimize = make("TextButton", {
+    Position = UDim2.new(1, -61, 0, 5), Size = UDim2.fromOffset(24, 25),
+    BackgroundColor3 = C.hover, BorderSizePixel = 0, Text = "—",
+    TextColor3 = C.text, Font = Enum.Font.GothamBold, TextSize = 14,
+}, top); corner(minimize, 4)
 local close = make("TextButton", {
-    Name = "Close", Position = UDim2.new(1, -38, 0, 9), Size = UDim2.fromOffset(26, 26),
-    BackgroundColor3 = COLORS.panel2, BorderSizePixel = 0, Text = "×",
-    Font = Enum.Font.Gotham, TextSize = 19, TextColor3 = COLORS.text,
-}, top)
-make("UICorner", {CornerRadius = UDim.new(0, 6)}, close)
-close.MouseButton1Click:Connect(function() screen.Enabled = false end)
+    Position = UDim2.new(1, -31, 0, 5), Size = UDim2.fromOffset(24, 25),
+    BackgroundColor3 = C.hover, BorderSizePixel = 0, Text = "×",
+    TextColor3 = C.text, Font = Enum.Font.Gotham, TextSize = 17,
+}, top); corner(close, 4)
 
-local sidebar = make("Frame", {
-    Name = "Sidebar", Position = UDim2.fromOffset(10, 58), Size = UDim2.new(0, 146, 1, -68),
-    BackgroundColor3 = COLORS.panel, BorderSizePixel = 0,
-}, main)
-make("UICorner", {CornerRadius = UDim.new(0, 8)}, sidebar)
-local navList = make("UIListLayout", {Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder}, sidebar)
-make("UIPadding", {PaddingTop = UDim.new(0, 9), PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7)}, sidebar)
+local sidebar = make("Frame", {Position = UDim2.fromOffset(0, 36), Size = UDim2.new(0, 145, 1, -36), BackgroundColor3 = C.sidebar, BorderSizePixel = 0}, main)
+local nav = make("Frame", {Position = UDim2.fromOffset(8, 8), Size = UDim2.new(1, -16, 1, -16), BackgroundTransparency = 1}, sidebar)
+make("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, nav)
+local content = make("Frame", {Position = UDim2.fromOffset(145, 36), Size = UDim2.new(1, -145, 1, -36), BackgroundTransparency = 1}, main)
+local pages, navButtons = {}, {}
+local currentPage = nil
+local minimized = false
 
-local content = make("Frame", {
-    Name = "Content", Position = UDim2.fromOffset(166, 58), Size = UDim2.new(1, -176, 1, -68),
-    BackgroundColor3 = COLORS.panel, BorderSizePixel = 0,
-}, main)
-make("UICorner", {CornerRadius = UDim.new(0, 8)}, content)
-local pageTitle = make("TextLabel", {
-    Name = "PageTitle", BackgroundTransparency = 1, Position = UDim2.fromOffset(16, 9),
-    Size = UDim2.new(1, -32, 0, 26), Font = Enum.Font.GothamBold,
-    TextSize = 14, TextColor3 = COLORS.text, TextXAlignment = Enum.TextXAlignment.Left,
-    Text = "Home",
-}, content)
-local pageScroll = make("ScrollingFrame", {
-    Name = "Page", Position = UDim2.fromOffset(10, 42), Size = UDim2.new(1, -20, 1, -52),
-    BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
-    ScrollBarImageColor3 = COLORS.accent, CanvasSize = UDim2.new(0, 0, 0, 0),
-}, content)
-local pageLayout = make("UIListLayout", {Padding = UDim.new(0, 7), SortOrder = Enum.SortOrder.LayoutOrder}, pageScroll)
-pageLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-    pageScroll.CanvasSize = UDim2.new(0, 0, 0, pageLayout.AbsoluteContentSize.Y + 8)
-end)
-
-local pageConnections = {}
-local function trackPageConnection(connection)
-    table.insert(pageConnections, connection)
-    return connection
+local function makePage(name)
+    local page = make("ScrollingFrame", {
+        Name = name, Size = UDim2.new(1, -18, 1, -18), Position = UDim2.fromOffset(9, 9),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+        ScrollBarImageColor3 = C.border, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        Visible = false,
+    }, content)
+    make("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder}, page)
+    make("UIPadding", {PaddingBottom = UDim.new(0, 8)}, page)
+    pages[name] = page
+    local b = make("TextButton", {
+        Size = UDim2.new(1, 0, 0, 29), BackgroundColor3 = C.sidebar, BorderSizePixel = 0,
+        Text = name, TextColor3 = C.muted, Font = Enum.Font.Gotham, TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false,
+    }, nav)
+    make("UIPadding", {PaddingLeft = UDim.new(0, 9)}, b)
+    corner(b, 4); navButtons[name] = b
+    connect(b.MouseButton1Click, function()
+        if currentPage then currentPage.Visible = false end
+        if currentPage and navButtons[currentPage.Name] then
+            navButtons[currentPage.Name].BackgroundColor3 = C.sidebar
+            navButtons[currentPage.Name].TextColor3 = C.muted
+        end
+        currentPage = page; page.Visible = true
+        b.BackgroundColor3 = C.hover; b.TextColor3 = C.text
+    end)
+    return page
 end
 
-local function clearPage()
-    for _, connection in ipairs(pageConnections) do
-        pcall(function() connection:Disconnect() end)
-    end
-    table.clear(pageConnections)
-
-    for _, child in ipairs(pageScroll:GetChildren()) do
-        if not child:IsA("UIListLayout") then child:Destroy() end
-    end
+local function section(page, title, subtitle)
+    local f = make("Frame", {Size = UDim2.new(1, -2, 0, subtitle and 51 or 31), BackgroundTransparency = 1}, page)
+    make("TextLabel", {Size = UDim2.new(1, 0, 0, 25), BackgroundTransparency = 1,
+        Text = title, TextColor3 = C.text, Font = Enum.Font.GothamSemibold, TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left}, f)
+    if subtitle then make("TextLabel", {Position = UDim2.fromOffset(0, 24), Size = UDim2.new(1, 0, 0, 25),
+        BackgroundTransparency = 1, Text = subtitle, TextColor3 = C.muted, Font = Enum.Font.Gotham,
+        TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left}, f) end
 end
-
-local function section(text)
-    return make("TextLabel", {
-        BackgroundTransparency = 1, Size = UDim2.new(1, -6, 0, 22),
-        Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = COLORS.accent,
-        Text = string.upper(text), TextXAlignment = Enum.TextXAlignment.Left,
-    }, pageScroll)
+local function note(page, text)
+    local f = make("Frame", {Size = UDim2.new(1, -2, 0, 38), BackgroundColor3 = C.panel, BorderSizePixel = 0}, page)
+    corner(f, 4)
+    make("TextLabel", {Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -20, 1, 0),
+        BackgroundTransparency = 1, Text = text, TextColor3 = C.muted, Font = Enum.Font.Gotham,
+        TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left}, f)
 end
-
-local function description(text)
-    return make("TextLabel", {
-        BackgroundTransparency = 1, Size = UDim2.new(1, -6, 0, 34),
-        Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = COLORS.muted,
-        Text = text, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-        TextYAlignment = Enum.TextYAlignment.Top,
-    }, pageScroll)
-end
-
-local function rowBase(height)
-    local row = make("Frame", {
-        Size = UDim2.new(1, -6, 0, height or 38), BackgroundColor3 = COLORS.panel2,
-        BorderSizePixel = 0,
-    }, pageScroll)
-    make("UICorner", {CornerRadius = UDim.new(0, 6)}, row)
+local function checkbox(page, label, initial, callback)
+    local row = make("Frame", {Size = UDim2.new(1, -2, 0, 32), BackgroundColor3 = C.panel, BorderSizePixel = 0}, page)
+    corner(row, 4)
+    make("TextLabel", {Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -54, 1, 0),
+        BackgroundTransparency = 1, Text = label, TextColor3 = C.text, Font = Enum.Font.Gotham,
+        TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left}, row)
+    local box = make("TextButton", {Position = UDim2.new(1, -31, 0.5, -8), Size = UDim2.fromOffset(16, 16),
+        BackgroundColor3 = initial and C.check or C.bg, BorderSizePixel = 0,
+        Text = initial and "✓" or "", TextColor3 = C.bg, Font = Enum.Font.GothamBold,
+        TextSize = 12, AutoButtonColor = false}, row)
+    corner(box, 2); stroke(box, initial and C.check or C.border)
+    local value = initial == true
+    connect(box.MouseButton1Click, function()
+        value = not value
+        box.BackgroundColor3 = value and C.check or C.bg
+        box.Text = value and "✓" or ""
+        local s = box:FindFirstChildOfClass("UIStroke")
+        if s then s.Color = value and C.check or C.border end
+        if callback then callback(value) end
+    end)
     return row
 end
 
-local function toggle(label, key, callback)
-    local row = rowBase(38)
-    make("TextLabel", {
-        BackgroundTransparency = 1, Position = UDim2.fromOffset(11, 0), Size = UDim2.new(1, -75, 1, 0),
-        Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = COLORS.text,
-        Text = label, TextXAlignment = Enum.TextXAlignment.Left,
-    }, row)
-    local button = make("TextButton", {
-        Position = UDim2.new(1, -55, 0.5, -10), Size = UDim2.fromOffset(43, 20),
-        BackgroundColor3 = state[key] and COLORS.accent or COLORS.border,
-        BorderSizePixel = 0, Text = state[key] and "ON" or "OFF",
-        Font = Enum.Font.GothamBold, TextSize = 9, TextColor3 = COLORS.text,
-    }, row)
-    make("UICorner", {CornerRadius = UDim.new(0, 5)}, button)
-    button.MouseButton1Click:Connect(function()
-        state[key] = not state[key]
-        button.Text = state[key] and "ON" or "OFF"
-        button.BackgroundColor3 = state[key] and COLORS.accent or COLORS.border
-        if callback then
-            local ok, err = pcall(callback, state[key])
-            if not ok then notify(label .. " error: " .. tostring(err)) end
-        end
-    end)
-end
+local home = makePage("Home")
+section(home, "EclipseHub 1.2", "Minimal interface for Bee Swarm Simulator")
+section(home, "Status")
+note(home, "UI initialized. Checkboxes save their state for this session only.")
+note(home, "Only features explicitly marked as implemented perform actions. Quest automation requires tested game-specific handlers.")
 
-local function dropdown(label, key, options, callback)
-    local row = rowBase(40)
-    make("TextLabel", {
-        BackgroundTransparency = 1, Position = UDim2.fromOffset(11, 0), Size = UDim2.new(0.48, 0, 1, 0),
-        Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = COLORS.text,
-        Text = label, TextXAlignment = Enum.TextXAlignment.Left,
-    }, row)
-    local button = make("TextButton", {
-        Position = UDim2.new(0.48, 0, 0.5, -13), Size = UDim2.new(0.52, -8, 0, 26),
-        BackgroundColor3 = COLORS.background, BorderSizePixel = 0,
-        Text = tostring(state[key]), Font = Enum.Font.Gotham, TextSize = 10,
-        TextColor3 = COLORS.text, TextTruncate = Enum.TextTruncate.AtEnd,
-    }, row)
-    make("UICorner", {CornerRadius = UDim.new(0, 5)}, button)
-    local index = table.find(options, state[key]) or 1
-    button.MouseButton1Click:Connect(function()
-        index = index % #options + 1
-        state[key] = options[index]
-        button.Text = options[index]
-        if callback then
-            local ok, err = pcall(callback, options[index])
-            if not ok then notify(label .. " error: " .. tostring(err)) end
-        end
-    end)
-end
+local farm = makePage("Farm")
+section(farm, "Farm", "Basic controls")
+checkbox(farm, "Auto Dig", false, function(v) Settings.autoDig = v end)
+checkbox(farm, "Auto Farm", false, function(v) Settings.autoFarm = v end)
+checkbox(farm, "Auto Convert Pollen", false, function(v) Settings.autoConvert = v end)
+checkbox(farm, "Auto Use Sprinkler", false, function(v) Settings.autoSprinkler = v end)
+checkbox(farm, "Auto Collect Tokens", false, function(v) Settings.autoTokens = v end)
+note(farm, "Auto Dig uses the executor's mouse1click() function when available. Other Farm options are UI settings until their game logic is implemented.")
 
-local function slider(label, key, minValue, maxValue, callback)
-    local row = rowBase(55)
-    make("TextLabel", {
-        BackgroundTransparency = 1, Position = UDim2.fromOffset(11, 3), Size = UDim2.new(1, -70, 0, 20),
-        Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = COLORS.text,
-        Text = label, TextXAlignment = Enum.TextXAlignment.Left,
-    }, row)
-    local valueLabel = make("TextLabel", {
-        BackgroundTransparency = 1, Position = UDim2.new(1, -52, 0, 3), Size = UDim2.fromOffset(40, 20),
-        Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = COLORS.text,
-        Text = tostring(state[key]) .. "%", TextXAlignment = Enum.TextXAlignment.Right,
-    }, row)
-    local track = make("Frame", {
-        Position = UDim2.fromOffset(11, 32), Size = UDim2.new(1, -22, 0, 5),
-        BackgroundColor3 = COLORS.border, BorderSizePixel = 0,
-    }, row)
-    make("UICorner", {CornerRadius = UDim.new(1, 0)}, track)
-    local range = math.max(1, maxValue - minValue)
-    local initialAlpha = math.clamp((state[key] - minValue) / range, 0, 1)
-    local fill = make("Frame", {
-        Size = UDim2.new(initialAlpha, 0, 1, 0),
-        BackgroundColor3 = COLORS.accent, BorderSizePixel = 0,
-    }, track)
-    make("UICorner", {CornerRadius = UDim.new(1, 0)}, fill)
-    local dragging = false
-    local function setFromX(x)
-        local width = track.AbsoluteSize.X
-        if width <= 0 then return end
-        local alpha = math.clamp((x - track.AbsolutePosition.X) / width, 0, 1)
-        local value = math.floor(minValue + alpha * range + 0.5)
-        state[key] = value
-        valueLabel.Text = tostring(value) .. "%"
-        fill.Size = UDim2.new(alpha, 0, 1, 0)
-        if callback then pcall(callback, value) end
+local quest = makePage("Quest")
+section(quest, "Auto Quest", "Select the NPC quest lines you want enabled")
+local bears = {
+    "Black Bear", "Brown Bear", "Mother Bear", "Panda Bear", "Science Bear",
+    "Polar Bear", "Spirit Bear", "Riley Bee", "Bucko Bee", "Honey Bee",
+    "Robo Bear", "Dapper Bear", "Bee Bear", "Gummy Bear", "Bubble Bee Man",
+    "Onett", "Stick Bug", "Windy Bee",
+}
+for _, name in ipairs(bears) do
+    checkbox(quest, name, false, function(v) Settings.autoQuest[name] = v end)
+end
+section(quest, "Beesmas", "Seasonal quest and gift options")
+for _, name in ipairs({"Beesmas NPC Quests", "Gift Boxes", "Beesmas Gifts", "Beesmas Decorations", "Snowbear", "Samovar", "Stockings", "Honeyday Candles"}) do
+    checkbox(quest, name, false, function(v) Settings.beesmas[name] = v end)
+end
+note(quest, "These selections currently store preferences only. They do not navigate to NPCs, accept quests, collect gifts, or complete objectives yet.")
+
+local token = makePage("Farm Token")
+section(token, "Token Collection")
+checkbox(token, "Enable token collection preference", false, function(v) Settings.autoTokens = v end)
+note(token, "Automatic token targeting and pathfinding are not implemented in this build.")
+
+local webhook = makePage("Webhook")
+section(webhook, "Webhook")
+note(webhook, "Webhook delivery is not implemented. Avoid entering private webhook URLs into scripts you do not trust.")
+
+local config = makePage("Config")
+section(config, "Configuration")
+note(config, "Settings are temporary and reset when the script restarts.")
+checkbox(config, "Debug messages", false, function(v) Settings.debug = v end)
+
+local debugPage = makePage("Debug")
+section(debugPage, "Diagnostics")
+local executorName = "unknown"
+if type(identifyexecutor) == "function" then
+    local ok, value = pcall(identifyexecutor)
+    if ok and value then executorName = tostring(value) end
+end
+for _, item in ipairs({
+    "Executor: " .. executorName,
+    "mouse1click: " .. tostring(type(mouse1click) == "function"),
+    "gethui: " .. tostring(type(gethui) == "function"),
+    "HTTP request: " .. tostring(type(request) == "function" or type(http_request) == "function"),
+}) do note(debugPage, item) end
+
+local anti = makePage("AntiBan")
+section(anti, "Safety")
+checkbox(anti, "Anti-AFK", false, function(v) Settings.antiAfk = v end)
+note(anti, "No script can guarantee protection from moderation. Anti-AFK support is not enabled by this checkbox in this build.")
+
+local server = makePage("Server Hop")
+section(server, "Server Hop")
+note(server, "Server discovery and teleport are not implemented in this build.")
+
+-- Functional Auto Dig loop, guarded against missing executor support.
+local digTaskRunning = false
+local function startDigLoop()
+    if digTaskRunning then return end
+    if type(mouse1click) ~= "function" then
+        Settings.autoDig = false
+        warn("[EclipseHub] Auto Dig unavailable: executor does not expose mouse1click().")
+        return
     end
-    track.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true; setFromX(input.Position.X)
+    digTaskRunning = true
+    task.spawn(function()
+        while Settings.autoDig and gui.Parent do
+            local ok, err = pcall(mouse1click)
+            if not ok then
+                Settings.autoDig = false
+                warn("[EclipseHub] Auto Dig stopped: " .. tostring(err))
+                break
+            end
+            task.wait(0.12)
         end
-    end)
-    trackPageConnection(UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            setFromX(input.Position.X)
-        end
-    end))
-    trackPageConnection(UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
-    end))
-end
-
--- Hook points for real game logic. UI controls should not claim to automate anything until handlers are implemented.
-actions.startFarm = function()
-    notify("Auto Farm logic is not configured yet.")
-end
-actions.stopFarm = function()
-    notify("Auto Farm stopped.")
-end
-actions.startQuest = function()
-    notify("Quest automation logic is not configured yet.")
-end
-
-local function buildPage(name)
-    clearPage()
-    pageTitle.Text = name
-    if name == "Home" then
-        section("Welcome to EclipseHub")
-        description("A compact BSS hub with a clean, readable codebase.")
-        section("Status")
-        description("UI loaded successfully. Gameplay automation requires executor-specific testing and implemented handlers.")
-        toggle("Debug messages", "debugMode", function(enabled) notify("Debug " .. (enabled and "enabled" or "disabled")) end)
-    elseif name == "Farm" then
-        section("Field")
-        dropdown("Target Field", "selectedField", FIELDS, function(value) notify("Target field: " .. value) end)
-        slider("Auto Convert Threshold", "convertAt", 1, 100)
-        section("Automation")
-        toggle("Auto Farm", "autoFarm", function(enabled)
-            if enabled then actions.startFarm() else actions.stopFarm() end
-        end)
-        toggle("Auto Dig", "autoDig", function(enabled) notify("Auto Dig " .. (enabled and "enabled" or "disabled") .. " (handler pending)") end)
-        toggle("Auto Sprinkler", "autoSprinkler", function(enabled) notify("Auto Sprinkler " .. (enabled and "enabled" or "disabled") .. " (handler pending)") end)
-        dropdown("Sprinkler Type", "sprinklerType", SPRINKLERS, function(value) notify("Sprinkler: " .. value) end)
-        toggle("Parachute", "parachute", function(enabled) notify("Parachute " .. (enabled and "enabled" or "disabled") .. " (handler pending)") end)
-    elseif name == "Quest" then
-        section("Quest Automation")
-        toggle("Auto Quest", "autoQuest", function(enabled) if enabled then actions.startQuest() else notify("Auto Quest disabled") end end)
-        description("Quest selection, NPC navigation, and objective handling are not wired up yet.")
-    elseif name == "Planters" then
-        section("Planters")
-        toggle("Auto Planters", "autoPlanters", function(enabled) notify("Auto Planters " .. (enabled and "enabled" or "disabled") .. " (handler pending)") end)
-        description("Planting, growth tracking, and harvesting logic is not wired up yet.")
-    elseif name == "Toys" then
-        section("Toys")
-        toggle("Auto Toys", "autoToys", function(enabled) notify("Auto Toys " .. (enabled and "enabled" or "disabled") .. " (handler pending)") end)
-        description("Toy selection and cooldown tracking are not wired up yet.")
-    elseif name == "Webhook" then
-        section("Webhook")
-        toggle("Enable Webhook", "webhookEnabled", function(enabled) notify("Webhook " .. (enabled and "enabled" or "disabled") .. ". Add a validated endpoint handler before use.") end)
-        description("Webhook delivery is not implemented. Do not paste private tokens into public scripts.")
-    elseif name == "Config" then
-        section("Configuration")
-        description("Settings currently live in this session only; persistent save/load is not implemented.")
-        local reset = make("TextButton", {Size = UDim2.new(1, -6, 0, 34), BackgroundColor3 = COLORS.panel2, BorderSizePixel = 0, Text = "Reset UI", Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = COLORS.text}, pageScroll)
-        make("UICorner", {CornerRadius = UDim.new(0, 6)}, reset)
-        reset.MouseButton1Click:Connect(function() main.Position = UDim2.new(0.5, -345, 0.5, -220); notify("Window position reset") end)
-    elseif name == "Debug" then
-        section("Diagnostics")
-        description("Executor capability checks")
-        local function report(label, value) description(label .. ": " .. (value and "available" or "not available")) end
-        report("getgenv", type(getgenv) == "function")
-        report("request / http_request", type(request) == "function" or type(http_request) == "function")
-        report("gethui", type(gethui) == "function")
-        report("Drawing API", type(Drawing) == "table")
-        toggle("Debug mode", "debugMode")
-    elseif name == "Farm Token" then
-        section("Token Collection")
-        description("Token collection settings will be added alongside tested farm logic.")
-    elseif name == "AntiBan" then
-        section("Safety")
-        toggle("Anti-AFK", "antiAfk", function(enabled) notify("Anti-AFK toggle changed; handler pending") end)
-        description("No script can guarantee that an account will not be moderated or banned.")
-    elseif name == "Server Hop" then
-        section("Server Hop")
-        toggle("Enable Server Hop", "serverHop", function(enabled) notify("Server Hop " .. (enabled and "enabled" or "disabled") .. " (handler pending)") end)
-        description("Server discovery and teleport logic are not wired up yet.")
-    end
-end
-
-local tabs = {"Home", "Farm", "Quest", "Planters", "Toys", "Webhook", "Config", "Debug", "Farm Token", "AntiBan", "Server Hop"}
-for i, tabName in ipairs(tabs) do
-    local button = make("TextButton", {
-        Name = tabName:gsub("%s+", ""), Size = UDim2.new(1, 0, 0, 29),
-        BackgroundColor3 = tabName == "Home" and COLORS.accent or COLORS.panel,
-        BorderSizePixel = 0, Text = tabName, Font = Enum.Font.Gotham,
-        TextSize = 11, TextColor3 = COLORS.text, LayoutOrder = i,
-    }, sidebar)
-    make("UICorner", {CornerRadius = UDim.new(0, 5)}, button)
-    button.MouseButton1Click:Connect(function()
-        for _, child in ipairs(sidebar:GetChildren()) do
-            if child:IsA("TextButton") then child.BackgroundColor3 = COLORS.panel end
-        end
-        button.BackgroundColor3 = COLORS.accent
-        buildPage(tabName)
+        digTaskRunning = false
     end)
 end
-
--- Drag window by the top bar.
-do
-    local dragging, dragStart, startPosition
-    top.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPosition = main.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+-- Rebind Auto Dig to start/stop its loop; the checkbox state remains the source of truth.
+for _, row in ipairs(farm:GetChildren()) do
+    if row:IsA("Frame") then
+        local label = row:FindFirstChildOfClass("TextLabel")
+        local button = row:FindFirstChildWhichIsA("TextButton")
+        if label and label.Text == "Auto Dig" and button then
+            connect(button.MouseButton1Click, function()
+                task.defer(function()
+                    if Settings.autoDig then startDigLoop() end
+                end)
             end)
         end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragStart
-            main.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
-        end
-    end)
+    end
 end
 
-UserInputService.InputBegan:Connect(function(input, processed)
-    if not processed and input.KeyCode == Enum.KeyCode.RightShift then
-        screen.Enabled = not screen.Enabled
+local dragging, dragStart, startPos = false, nil, nil
+connect(top.InputBegan, function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true; dragStart = input.Position; startPos = main.Position
     end
 end)
+connect(UIS.InputChanged, function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+connect(UIS.InputEnded, function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+end)
+connect(minimize.MouseButton1Click, function()
+    minimized = not minimized
+    sidebar.Visible = not minimized
+    content.Visible = not minimized
+    main.Size = minimized and UDim2.fromOffset(250, 36) or UDim2.fromOffset(650, 420)
+    minimize.Text = minimized and "□" or "—"
+end)
+connect(close.MouseButton1Click, function()
+    Settings.autoDig = false
+    disconnectAll()
+    gui:Destroy()
+end)
 
-buildPage("Home")
-notify("EclipseHub UI loaded")
+-- Select Home initially.
+currentPage = pages.Home
+currentPage.Visible = true
+navButtons.Home.BackgroundColor3 = C.hover
+navButtons.Home.TextColor3 = C.text
+
+print("[EclipseHub] 1.2 UI loaded. Auto Dig is the only implemented gameplay action in this build.")
